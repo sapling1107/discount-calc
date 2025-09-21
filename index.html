@@ -31,9 +31,9 @@
     </thead>
     <tbody>
       <tr>
-        <td><input type="number" step="0.01" min="0" oninput="recalc(this)"></td>
-        <td><input type="number" step="0.01" min="0" oninput="recalc(this)"></td>
-        <td><input type="number" step="0.01" min="0" oninput="recalc(this)"></td>
+        <td><input type="number" step="0.01" min="0"></td>
+        <td><input type="number" step="0.01" min="0"></td>
+        <td><input type="number" step="0.01" min="0"></td>
         <td class="note"></td>
       </tr>
     </tbody>
@@ -45,17 +45,17 @@
   <script>
     const has = v => !Number.isNaN(v);
 
-    // 將使用者輸入的折扣解讀成「百分比數字」：0.85 -> 85，85 -> 85
+    // 折扣輸入轉百分比（0.85 -> 85；85 -> 85）
     function toPercent(val) {
       if (!has(val)) return NaN;
-      if (val <= 1.5) return val * 100; // 視為比例
-      return val; // 視為百分比
+      if (val <= 1.5) return val * 100;
+      return val;
     }
-    // 將折扣轉為「乘數比例」：85(%) -> 0.85，0.85 -> 0.85
+    // 折扣輸入轉比例（85 -> 0.85；0.85 -> 0.85）
     function toRatio(val) {
       if (!has(val)) return NaN;
-      if (val <= 1.5) return val;       // 已是比例
-      return val / 100;                 // 由百分比轉比例
+      if (val <= 1.5) return val;
+      return val / 100;
     }
 
     function setNote(noteCell, percent) {
@@ -66,104 +66,127 @@
       }
     }
 
-    function recalc(input) {
+    function scheduleRecalc(input) {
       const row = input.closest("tr");
+      // 記錄最後編輯欄位（0: 原價, 1: 特價, 2: 折扣）
+      row.dataset.lastEdited = [...row.querySelectorAll("input")].indexOf(input);
+
+      // debounce：避免輸入過程被打斷
+      clearTimeout(row._timer);
+      row._timer = setTimeout(() => recalcRow(row), 300);
+    }
+
+    function recalcRow(row) {
       const inputs = row.querySelectorAll("input");
       const noteCell = row.querySelector(".note");
-
       let original = parseFloat(inputs[0].value);
       let sale     = parseFloat(inputs[1].value);
-      let discRaw  = parseFloat(inputs[2].value); // 可能是 85 或 0.85
+      let discRaw  = parseFloat(inputs[2].value);
 
       const filled = [has(original), has(sale), has(discRaw)].filter(Boolean).length;
 
-      // 少於兩個值就不算
-      if (filled < 2) { setNote(noteCell, has(discRaw) ? toPercent(discRaw) : NaN); return; }
-      // 防止除以 0
+      // 少於兩個值就只更新折數提示
+      if (filled < 2) {
+        setNote(noteCell, has(discRaw) ? toPercent(discRaw) : NaN);
+        return;
+      }
       if (has(original) && original === 0) { setNote(noteCell, NaN); return; }
 
-      // Case 1：原價 + 特價 → 算折扣率（百分比）
-      if (has(original) && has(sale) && !has(discRaw)) {
-        if (original > 0) {
+      const last = parseInt(row.dataset.lastEdited ?? "0", 10);
+
+      // ---- 計算策略 ----
+      // 當三格都有值：以「最後編輯」為主，覆寫最不合理的那一格
+      // 規則：
+      //  - 最後改「折扣」(2)：用 原價 × 折扣 → 覆寫「特價」
+      //  - 最後改「特價」(1)：有原價 → 算折扣；否則用折扣→算原價
+      //  - 最後改「原價」(0)：有折扣 → 算特價；否則用特價→算折扣
+      if (filled === 3) {
+        if (last === 2) {
+          const ratio = toRatio(discRaw);
+          if (has(ratio)) {
+            sale = original * ratio;
+            inputs[1].value = sale.toFixed(2);
+          }
+        } else if (last === 1) {
+          if (has(original) && original > 0) {
+            const percent = (sale / original) * 100;
+            inputs[2].value = percent.toFixed(2);
+          } else {
+            const ratio = toRatio(discRaw);
+            if (has(ratio) && ratio > 0) {
+              original = sale / ratio;
+              inputs[0].value = original.toFixed(2);
+            }
+          }
+        } else { // last === 0
+          const ratio = toRatio(discRaw);
+          if (has(ratio)) {
+            sale = original * ratio;
+            inputs[1].value = sale.toFixed(2);
+          } else if (has(original) && original > 0) {
+            const percent = (sale / original) * 100;
+            inputs[2].value = percent.toFixed(2);
+          }
+        }
+      } else {
+        // 只有兩格：補第三格
+        // 原價+特價 → 折扣
+        if (has(original) && has(sale) && !has(discRaw)) {
           const percent = (sale / original) * 100;
-          inputs[2].value = percent.toFixed(2);       // 統一顯示為百分比
-          setNote(noteCell, percent);
-        }
-        return;
-      }
-
-      // Case 2：原價 + 折扣率 → 算特價
-      if (has(original) && !has(sale) && has(discRaw)) {
-        const ratio = toRatio(discRaw);
-        if (has(ratio)) {
-          sale = original * ratio;
-          inputs[1].value = sale.toFixed(2);
-          const percent = toPercent(discRaw);
-          inputs[2].value = percent.toFixed(2);       // 將 0.85 轉成 85 顯示
-          setNote(noteCell, percent);
-        }
-        return;
-      }
-
-      // Case 3：特價 + 折扣率 → 算原價
-      if (!has(original) && has(sale) && has(discRaw)) {
-        const ratio = toRatio(discRaw);
-        if (has(ratio) && ratio > 0) {
-          original = sale / ratio;
-          inputs[0].value = original.toFixed(2);
-          const percent = toPercent(discRaw);
           inputs[2].value = percent.toFixed(2);
-          setNote(noteCell, percent);
         }
-        return;
+        // 原價+折扣 → 特價
+        else if (has(original) && !has(sale) && has(discRaw)) {
+          const ratio = toRatio(discRaw);
+          if (has(ratio)) inputs[1].value = (original * ratio).toFixed(2);
+          inputs[2].value = toPercent(discRaw).toFixed(2);
+        }
+        // 特價+折扣 → 原價
+        else if (!has(original) && has(sale) && has(discRaw)) {
+          const ratio = toRatio(discRaw);
+          if (has(ratio) && ratio > 0) inputs[0].value = (sale / ratio).toFixed(2);
+          inputs[2].value = toPercent(discRaw).toFixed(2);
+        }
       }
 
-      // 三格都有值時，只更新折數提示（以折扣欄為準）
-      const percent = toPercent(discRaw);
-      setNote(noteCell, percent);
+      // 更新折數提示（以折扣欄為準）
+      const discPercent = parseFloat(inputs[2].value);
+      setNote(noteCell, has(discPercent) ? discPercent : NaN);
     }
 
-    function addRow() {
-      const tbody = document.getElementById("calcTable").getElementsByTagName("tbody")[0];
-      const newRow = document.createElement("tr");
+    // 綁定初始列事件
+    function bindRow(row) {
+      const inputs = row.querySelectorAll("input");
+      inputs.forEach(inp => {
+        inp.addEventListener("input", () => scheduleRecalc(inp));
+        inp.addEventListener("focus", () => { row.dataset.lastEdited = [...inputs].indexOf(inp); });
+      });
+    }
+    bindRow(document.querySelector("#calcTable tbody tr"));
 
+    function addRow() {
+      const tbody = document.querySelector("#calcTable tbody");
+      const tr = document.createElement("tr");
       for (let i = 0; i < 3; i++) {
         const td = document.createElement("td");
         const input = document.createElement("input");
         input.type = "number";
         input.step = "0.01";
-        input.oninput = function () { recalc(this); };
+        input.min = "0";
         td.appendChild(input);
-        newRow.appendChild(td);
+        tr.appendChild(td);
       }
-
       const noteTd = document.createElement("td");
       noteTd.className = "note";
-      newRow.appendChild(noteTd);
-
-      tbody.appendChild(newRow);
+      tr.appendChild(noteTd);
+      tbody.appendChild(tr);
+      bindRow(tr);
     }
 
     function clearAll() {
-      const tbody = document.getElementById("calcTable").getElementsByTagName("tbody")[0];
-      tbody.innerHTML = ""; // 清空表格內容
-
-      // 加回一行空白輸入
-      const row = document.createElement("tr");
-      for (let i = 0; i < 3; i++) {
-        const td = document.createElement("td");
-        const input = document.createElement("input");
-        input.type = "number";
-        input.step = "0.01";
-        input.oninput = function () { recalc(this); };
-        td.appendChild(input);
-        row.appendChild(td);
-      }
-      const noteTd = document.createElement("td");
-      noteTd.className = "note";
-      row.appendChild(noteTd);
-
-      tbody.appendChild(row);
+      const tbody = document.querySelector("#calcTable tbody");
+      tbody.innerHTML = "";
+      addRow();
     }
   </script>
 </body>
