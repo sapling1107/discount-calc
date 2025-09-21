@@ -30,10 +30,6 @@
       width: 110px;
       text-align: right;
     }
-    .note {
-      color: #555;
-      font-size: 0.9em;
-    }
     button {
       margin-top: 10px;
       margin-right: 6px;
@@ -59,7 +55,6 @@
         <th>原價</th>
         <th>特價</th>
         <th>折扣率（可輸入 85 或 0.85）</th>
-        <th>折數提示</th>
       </tr>
     </thead>
     <tbody>
@@ -67,7 +62,6 @@
         <td><input type="number" step="0.01" min="0"></td>
         <td><input type="number" step="0.01" min="0"></td>
         <td><input type="number" step="0.01" min="0"></td>
-        <td class="note"></td>
       </tr>
     </tbody>
   </table>
@@ -91,14 +85,6 @@
       return val / 100;
     }
 
-    function setNote(noteCell, percent) {
-      if (has(percent)) {
-        noteCell.textContent = "約 " + (percent / 10).toFixed(1) + " 折";
-      } else {
-        noteCell.textContent = "";
-      }
-    }
-
     function scheduleRecalc(input) {
       const row = input.closest("tr");
       // 記錄最後編輯欄位（0: 原價, 1: 特價, 2: 折扣）
@@ -109,83 +95,46 @@
       row._timer = setTimeout(() => recalcRow(row), 300);
     }
 
-    function recalcRow(row) {
-      const inputs = row.querySelectorAll("input");
-      const noteCell = row.querySelector(".note");
-      let original = parseFloat(inputs[0].value);
-      let sale     = parseFloat(inputs[1].value);
-      let discRaw  = parseFloat(inputs[2].value);
+function recalcRow(row) {
+  const inputs = row.querySelectorAll("input");
+  let original = parseFloat(inputs[0].value);
+  let sale     = parseFloat(inputs[1].value);
+  let discRaw  = parseFloat(inputs[2].value);
 
-      const filled = [has(original), has(sale), has(discRaw)].filter(Boolean).length;
+  const has = v => !Number.isNaN(v);
+  const filled = [has(original), has(sale), has(discRaw)].filter(Boolean).length;
+  if (filled < 2) return;
+  if (has(original) && original === 0) return;
 
-      // 少於兩個值就只更新折數提示
-      if (filled < 2) {
-        setNote(noteCell, has(discRaw) ? toPercent(discRaw) : NaN);
-        return;
-      }
-      if (has(original) && original === 0) { setNote(noteCell, NaN); return; }
+  const last = parseInt(row.dataset.lastEdited ?? "0", 10);
+  const toPercent = v => !has(v) ? NaN : (v <= 1.5 ? v * 100 : v);
+  const toRatio   = v => !has(v) ? NaN : (v <= 1.5 ? v       : v / 100);
 
-      const last = parseInt(row.dataset.lastEdited ?? "0", 10);
-
-      // ---- 計算策略 ----
-      // 當三格都有值：以「最後編輯」為主，覆寫最不合理的那一格
-      // 規則：
-      //  - 最後改「折扣」(2)：用 原價 × 折扣 → 覆寫「特價」
-      //  - 最後改「特價」(1)：有原價 → 算折扣；否則用折扣→算原價
-      //  - 最後改「原價」(0)：有折扣 → 算特價；否則用特價→算折扣
-      if (filled === 3) {
-        if (last === 2) {
-          const ratio = toRatio(discRaw);
-          if (has(ratio)) {
-            sale = original * ratio;
-            inputs[1].value = sale.toFixed(2);
-          }
-        } else if (last === 1) {
-          if (has(original) && original > 0) {
-            const percent = (sale / original) * 100;
-            inputs[2].value = percent.toFixed(2);
-          } else {
-            const ratio = toRatio(discRaw);
-            if (has(ratio) && ratio > 0) {
-              original = sale / ratio;
-              inputs[0].value = original.toFixed(2);
-            }
-          }
-        } else { // last === 0
-          const ratio = toRatio(discRaw);
-          if (has(ratio)) {
-            sale = original * ratio;
-            inputs[1].value = sale.toFixed(2);
-          } else if (has(original) && original > 0) {
-            const percent = (sale / original) * 100;
-            inputs[2].value = percent.toFixed(2);
-          }
-        }
-      } else {
-        // 只有兩格：補第三格
-        // 原價+特價 → 折扣
-        if (has(original) && has(sale) && !has(discRaw)) {
-          const percent = (sale / original) * 100;
-          inputs[2].value = percent.toFixed(2);
-        }
-        // 原價+折扣 → 特價
-        else if (has(original) && !has(sale) && has(discRaw)) {
-          const ratio = toRatio(discRaw);
-          if (has(ratio)) inputs[1].value = (original * ratio).toFixed(2);
-          inputs[2].value = toPercent(discRaw).toFixed(2);
-        }
-        // 特價+折扣 → 原價
-        else if (!has(original) && has(sale) && has(discRaw)) {
-          const ratio = toRatio(discRaw);
-          if (has(ratio) && ratio > 0) inputs[0].value = (sale / ratio).toFixed(2);
-          inputs[2].value = toPercent(discRaw).toFixed(2);
-        }
-      }
-
-      // 更新折數提示（以折扣欄為準）
-      const discPercent = parseFloat(inputs[2].value);
-      setNote(noteCell, has(discPercent) ? discPercent : NaN);
+  if (filled === 3) {
+    if (last === 2) { // 折扣最後改：用原價×折扣覆寫特價
+      sale = original * toRatio(discRaw);
+      inputs[1].value = sale.toFixed(2);
+    } else if (last === 1) { // 特價最後改：回算折扣
+      inputs[2].value = ((sale / original) * 100).toFixed(2);
+    } else { // 原價最後改：用折扣算特價
+      sale = original * toRatio(discRaw);
+      inputs[1].value = sale.toFixed(2);
     }
+  } else {
+    // 只有兩格：補第三格
+    if (has(original) && has(sale) && !has(discRaw)) {
+      inputs[2].value = ((sale / original) * 100).toFixed(2);
+    } else if (has(original) && !has(sale) && has(discRaw)) {
+      sale = original * toRatio(discRaw);
+      inputs[1].value = sale.toFixed(2);
+      inputs[2].value = toPercent(discRaw).toFixed(2);
+    } else if (!has(original) && has(sale) && has(discRaw)) {
+      original = sale / toRatio(discRaw);
+      inputs[0].value = original.toFixed(2);
+      inputs[2].value = toPercent(discRaw).toFixed(2);
+    }
+  }
+}
 
     // 綁定初始列事件
     function bindRow(row) {
@@ -197,24 +146,18 @@
     }
     bindRow(document.querySelector("#calcTable tbody tr"));
 
-    function addRow() {
-      const tbody = document.querySelector("#calcTable tbody");
-      const tr = document.createElement("tr");
-      for (let i = 0; i < 3; i++) {
-        const td = document.createElement("td");
-        const input = document.createElement("input");
-        input.type = "number";
-        input.step = "0.01";
-        input.min = "0";
-        td.appendChild(input);
-        tr.appendChild(td);
-      }
-      const noteTd = document.createElement("td");
-      noteTd.className = "note";
-      tr.appendChild(noteTd);
-      tbody.appendChild(tr);
-      bindRow(tr);
-    }
+function addRow() {
+  const tbody = document.querySelector("#calcTable tbody");
+  const tr = document.createElement("tr");
+  for (let i = 0; i < 3; i++) {
+    const td = document.createElement("td");
+    const input = document.createElement("input");
+    input.type = "number"; input.step = "0.01"; input.min = "0";
+    td.appendChild(input); tr.appendChild(td);
+  }
+  tbody.appendChild(tr);
+  bindRow(tr);
+}
 
     function clearAll() {
       const tbody = document.querySelector("#calcTable tbody");
